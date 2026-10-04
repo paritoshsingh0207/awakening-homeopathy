@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /services/{serviceId} {
+      allow read: if resource.data.isActive == true || isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /practitioners/{practitionerId} {
+      allow read: if resource.data.isActive == true || isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /slots/{slotId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+
+      // A public user may claim only an unbooked slot and only inside the same
+      // atomic transaction that creates their matching booking document.
+      allow update: if isAdmin() || (
+        signedIn()
+        && resource.data.isBooked == false
+        && request.resource.data.isBooked == true
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["isBooked", "bookedAt", "activeBookingId", "updatedAt"])
+        && request.resource.data.activeBookingId is string
+        && existsAfter(/databases/$(database)/documents/bookings/$(request.resource.data.activeBookingId))
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.activeBookingId)).data.userId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.activeBookingId)).data.slotId == slotId
+      );
+    }
+
+    match /bookings/{bookingId} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && request.resource.data.paymentStatus == "pending";
+
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+
+      // User can submit/replace only payment claim fields. Clinical/admin fields
+      // remain protected.
+      allow update: if isAdmin() || (
+        signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "paymentProofPath",
+          "paymentProofUrl",
+          "paymentReference",
+          "paymentStatus",
+          "paymentClaimedAt",
+          "updatedAt"
+        ])
+        && request.resource.data.paymentStatus == "claimed"
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /inquiries/{inquiryId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /siteSettings/{settingId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}
