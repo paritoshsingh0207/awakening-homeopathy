@@ -6,7 +6,7 @@ A **separate** React + Firebase website for Awakening's homoeopathic consultatio
 
 - React 18 + TypeScript + Vite
 - Responsive ocean/glass visual language inspired by the existing Awakening site
-- Public pages: Home, About, Care Approach, Learn, Contact, Privacy, Terms, Medical Disclaimer
+- Public pages: Home, Practice/Practitioner, Care Approach, Patient Guides + guide detail pages, Contact, Privacy, Terms, Medical Disclaimer
 - Firebase Anonymous Auth for public booking/contact ownership
 - Email/Password Auth for administrators
 - Firestore-backed services, practitioners, live slots, bookings, enquiries and payment settings
@@ -14,7 +14,7 @@ A **separate** React + Firebase website for Awakening's homoeopathic consultatio
 - Provisional booking confirmation page
 - Manual payment reference/proof flow
 - Optional Firebase Storage upload for images/PDF payment proofs
-- Admin dashboard for bookings, services, practitioners, slots, enquiries and payment settings
+- Admin dashboard for bookings, consultation services, practitioner credentials, daily slot generation, enquiries and payment settings
 - Firebase Hosting SPA configuration
 - Firestore rules, Storage rules and indexes
 - Per-page SEO metadata, robots.txt, sitemap.xml and favicon
@@ -169,6 +169,23 @@ Storage rules restrict reads/writes to the owner and administrators. Proof files
 - The client never contains a service account/private key.
 - Payment verification is deliberately an administrative operation.
 - Booking slot claiming runs inside a Firestore transaction.
+
+## Appointment schedule model
+
+The booking calendar uses:
+
+```text
+Appointment duration: 15 minutes
+Buffer after appointment: 15 minutes
+Start interval: 30 minutes
+Default clinic window: 09:00–15:00 Asia/Kolkata
+```
+
+The admin may change the opening/closing window for a particular generated day, while the 15-minute appointment + 15-minute buffer rule remains fixed.
+
+## Content and professional-boundary notes
+
+Public copy deliberately avoids guaranteed cure claims, testimonials and instructions to stop prescribed care. Practitioner qualifications and registration information are data fields rather than hard-coded claims. Before public launch, the registered practitioner should review the final presentation against current professional-conduct, advertising and local practice requirements.
 
 ## Suggested next production additions
 
