@@ -9,6 +9,17 @@ interface SeoOptions {
 
 const DEFAULT_SITE_URL = "https://awakening-homeopathy.web.app";
 
+function resolveSiteUrl() {
+  const configured = String(import.meta.env.VITE_SITE_URL || "").trim().replace(/\/$/, "");
+  const isLocalConfigured = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configured);
+
+  if (import.meta.env.PROD && (!configured || isLocalConfigured)) {
+    return DEFAULT_SITE_URL;
+  }
+
+  return configured || window.location.origin || DEFAULT_SITE_URL;
+}
+
 export function useSEO({ title, description, path = "/", noIndex = false }: SeoOptions) {
   useEffect(() => {
     document.title = title;
@@ -23,7 +34,7 @@ export function useSEO({ title, description, path = "/", noIndex = false }: SeoO
       el.setAttribute("content", content);
     };
 
-    const siteUrl = (import.meta.env.VITE_SITE_URL || DEFAULT_SITE_URL || window.location.origin).replace(/\/$/, "");
+    const siteUrl = resolveSiteUrl();
     const canonical = `${siteUrl}${path.startsWith("/") ? path : `/${path}`}`;
 
     setMeta('meta[name="description"]', "name", "description", description);
