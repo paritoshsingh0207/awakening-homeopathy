@@ -1,5 +1,6 @@
 User-agent: *
 Allow: /
+Disallow: /admin
+Disallow: /booking/
 
-# Replace with your production domain before launch.
-Sitemap: https://your-homeopathy-domain.example/sitemap.xml
+Sitemap: https://awakening-homeopathy.web.app/sitemap.xml
