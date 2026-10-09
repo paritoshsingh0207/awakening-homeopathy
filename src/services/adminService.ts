@@ -12,6 +12,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import type {
@@ -24,7 +25,11 @@ import type {
   Service,
   Slot,
 } from "../types";
-import { localDateTimeToDate, toISO } from "../lib/utils";
+import { indiaDateTimeToDate, toISO } from "../lib/utils";
+
+export const SLOT_DURATION_MINUTES = 15;
+export const SLOT_GAP_MINUTES = 15;
+export const SLOT_START_INTERVAL_MINUTES = SLOT_DURATION_MINUTES + SLOT_GAP_MINUTES;
 
 export async function getAdminBookings(): Promise<Booking[]> {
   const snap = await getDocs(query(collection(db, "bookings"), orderBy("createdAt", "desc"), limit(200)));
@@ -61,11 +66,22 @@ export async function getAllServices(): Promise<Service[]> {
 }
 
 export async function saveService(service: Omit<Service, "id">, id?: string): Promise<string> {
+  const normalized = {
+    ...service,
+    duration: SLOT_DURATION_MINUTES,
+    currency: service.currency || "INR",
+  };
+
   if (id) {
-    await setDoc(doc(db, "services", id), { ...service, updatedAt: serverTimestamp() }, { merge: true });
+    await setDoc(doc(db, "services", id), { ...normalized, updatedAt: serverTimestamp() }, { merge: true });
     return id;
   }
-  const ref = await addDoc(collection(db, "services"), { ...service, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+
+  const ref = await addDoc(collection(db, "services"), {
+    ...normalized,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
   return ref.id;
 }
 
@@ -75,12 +91,22 @@ export async function getAllPractitioners(): Promise<Practitioner[]> {
 }
 
 export async function savePractitioner(practitioner: Omit<Practitioner, "id">, id?: string): Promise<string> {
+  const normalized = {
+    ...practitioner,
+    qualifications: practitioner.qualifications?.trim() || "",
+    registrationNumber: practitioner.registrationNumber?.trim() || "",
+    experience: practitioner.experience?.trim() || "",
+    languages: practitioner.languages?.trim() || "",
+    bio: practitioner.bio?.trim() || "",
+  };
+
   if (id) {
-    await setDoc(doc(db, "practitioners", id), { ...practitioner, updatedAt: serverTimestamp() }, { merge: true });
+    await setDoc(doc(db, "practitioners", id), { ...normalized, updatedAt: serverTimestamp() }, { merge: true });
     return id;
   }
+
   const ref = await addDoc(collection(db, "practitioners"), {
-    ...practitioner,
+    ...normalized,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -89,8 +115,9 @@ export async function savePractitioner(practitioner: Omit<Practitioner, "id">, i
 
 export async function getUpcomingSlots(): Promise<Slot[]> {
   const snap = await getDocs(
-    query(collection(db, "slots"), where("startTime", ">=", Timestamp.now()), orderBy("startTime", "asc"), limit(200))
+    query(collection(db, "slots"), where("startTime", ">=", Timestamp.now()), orderBy("startTime", "asc"), limit(300))
   );
+
   return snap.docs.map((d) => {
     const data = d.data();
     return {
@@ -101,25 +128,100 @@ export async function getUpcomingSlots(): Promise<Slot[]> {
       endTime: toISO(data.endTime),
       isBooked: Boolean(data.isBooked),
       activeBookingId: data.activeBookingId ?? null,
+      slotDurationMinutes: data.slotDurationMinutes ?? SLOT_DURATION_MINUTES,
+      gapAfterMinutes: data.gapAfterMinutes ?? SLOT_GAP_MINUTES,
     };
   });
 }
 
-export async function createSlot(service: Service, practitioner: Practitioner, startLocal: string): Promise<string> {
-  const start = localDateTimeToDate(startLocal);
-  if (start.getTime() <= Date.now()) throw new Error("Slot must be in the future.");
-  const end = new Date(start.getTime() + service.duration * 60_000);
-  const ref = await addDoc(collection(db, "slots"), {
-    serviceId: service.id,
-    practitionerId: practitioner.id,
-    startTime: Timestamp.fromDate(start),
-    endTime: Timestamp.fromDate(end),
-    isBooked: false,
-    activeBookingId: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+interface DailySlotInput {
+  service: Service;
+  practitioner: Practitioner;
+  date: string;
+  startTime: string;
+  endTime: string;
+}
+
+export async function createDailySlots({
+  service,
+  practitioner,
+  date,
+  startTime,
+  endTime,
+}: DailySlotInput): Promise<{ created: number; skipped: number }> {
+  const scheduleStart = indiaDateTimeToDate(date, startTime);
+  const scheduleEnd = indiaDateTimeToDate(date, endTime);
+
+  if (scheduleEnd.getTime() <= scheduleStart.getTime()) {
+    throw new Error("Closing time must be later than opening time.");
+  }
+
+  const minimumWindow = SLOT_DURATION_MINUTES * 60_000;
+  if (scheduleEnd.getTime() - scheduleStart.getTime() < minimumWindow) {
+    throw new Error("The clinic window is too short for a 15-minute appointment.");
+  }
+
+  const dayStart = indiaDateTimeToDate(date, "00:00");
+  const dayEnd = new Date(indiaDateTimeToDate(date, "23:59").getTime() + 60_000);
+
+  const existingSnap = await getDocs(
+    query(
+      collection(db, "slots"),
+      where("startTime", ">=", Timestamp.fromDate(dayStart)),
+      where("startTime", "<", Timestamp.fromDate(dayEnd)),
+      orderBy("startTime", "asc")
+    )
+  );
+
+  const occupiedStarts = new Set(
+    existingSnap.docs
+      .filter((row) => row.data().practitionerId === practitioner.id)
+      .map((row) => (row.data().startTime as Timestamp).toDate().getTime())
+  );
+
+  const starts: Date[] = [];
+  for (
+    let cursor = scheduleStart.getTime();
+    cursor + SLOT_DURATION_MINUTES * 60_000 <= scheduleEnd.getTime();
+    cursor += SLOT_START_INTERVAL_MINUTES * 60_000
+  ) {
+    if (cursor <= Date.now()) continue;
+    starts.push(new Date(cursor));
+  }
+
+  if (!starts.length) {
+    throw new Error("No future appointment times fit inside this clinic window.");
+  }
+
+  const batch = writeBatch(db);
+  let created = 0;
+  let skipped = 0;
+
+  starts.forEach((start) => {
+    if (occupiedStarts.has(start.getTime())) {
+      skipped += 1;
+      return;
+    }
+
+    const slotRef = doc(collection(db, "slots"));
+    const end = new Date(start.getTime() + SLOT_DURATION_MINUTES * 60_000);
+    batch.set(slotRef, {
+      serviceId: service.id,
+      practitionerId: practitioner.id,
+      startTime: Timestamp.fromDate(start),
+      endTime: Timestamp.fromDate(end),
+      slotDurationMinutes: SLOT_DURATION_MINUTES,
+      gapAfterMinutes: SLOT_GAP_MINUTES,
+      isBooked: false,
+      activeBookingId: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    created += 1;
   });
-  return ref.id;
+
+  if (created) await batch.commit();
+  return { created, skipped };
 }
 
 export async function removeSlot(slot: Slot): Promise<void> {
