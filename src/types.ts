@@ -16,6 +16,10 @@ export interface Practitioner {
   id: string;
   name: string;
   designation: string;
+  qualifications?: string;
+  registrationNumber?: string;
+  experience?: string;
+  languages?: string;
   bio?: string;
   isActive: boolean;
 }
@@ -28,6 +32,8 @@ export interface Slot {
   endTime: string;
   isBooked: boolean;
   activeBookingId?: string | null;
+  slotDurationMinutes?: number;
+  gapAfterMinutes?: number;
 }
 
 export interface Booking {
