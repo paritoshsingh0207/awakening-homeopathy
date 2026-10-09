@@ -52,7 +52,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main>{children}</main>
+      <main id="main-content">{children}</main>
 
       <footer className="footer">
         <div className="container footer-grid">
